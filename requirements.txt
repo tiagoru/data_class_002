@@ -1,0 +1,6 @@
+streamlit==1.36.0
+pandas
+plotly
+wordcloud
+pycountry
+country_converter   # optional but recommended for full continent coverage
