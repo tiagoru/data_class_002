@@ -102,9 +102,10 @@ alpha3_map = dict(zip(countries_df["name"], countries_df["alpha_3"]))
 
 
 # ---------- Tabs ----------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📝 Survey", "📄 Data", "📊 Visualizations", "🧠 Insights", "🤖 AI Summary"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📝 Survey", "📄 Data", "📊 Visualizations", "🧠 Insights", "🤖 AI Summary", "📈 Yearly Report"
 ])
+
 
 # ---------- Survey ----------
 with tab1:
@@ -450,3 +451,266 @@ with tab5:
                 mime="text/plain",
                 use_container_width=True,
             )
+# ---------- Yearly Report (KPIs, YoY deltas, cross-tabs, trends) ----------
+with tab6:
+    st.header("Yearly Report")
+
+    df_all = load_data()
+    if df_all.empty:
+        st.info("No data yet.")
+    else:
+        # ---- Prepare time & geography ----
+        dft = df_all.copy()
+        dft["ts"] = pd.to_datetime(dft["ts"], utc=True, errors="coerce")
+        dft = dft.dropna(subset=["ts"])
+        dft["year"] = dft["ts"].dt.year
+        dft["month"] = dft["ts"].dt.to_period("M").astype(str)
+
+        # Map continents
+        dft["continent"] = dft["alpha3"].apply(alpha3_to_continent)
+
+        # Year selector (defaults to most recent)
+        years = sorted(dft["year"].unique().tolist())
+        default_year = years[-1]
+        c1, c2, c3 = st.columns([1,1,1])
+        with c1:
+            year_sel = st.selectbox("Report year", years, index=years.index(default_year))
+        with c2:
+            compare_prev = st.checkbox("Compare against previous year", value=True)
+        with c3:
+            topn_countries_heatmap = st.slider("Top-N countries for country×role heatmap",
+                                               min_value=5, max_value=20, value=10, step=1)
+
+        cur = dft[dft["year"] == year_sel].copy()
+        prev = dft[dft["year"] == (year_sel - 1)].copy() if compare_prev else pd.DataFrame(columns=dft.columns)
+
+        # Helpers
+        def wilson_ci(k, n, z=1.96):
+            if n == 0: return (0.0, 0.0)
+            p = k / n
+            denom = 1 + z**2 / n
+            center = (p + z**2/(2*n)) / denom
+            half = z * math.sqrt((p*(1-p) + z**2/(4*n)) / n) / denom
+            return (max(0.0, center - half), min(1.0, center + half))
+
+        def inv_hhi(shares):
+            shares = [s for s in shares if s > 0]
+            return (1 / sum(s*s for s in shares)) if shares else 0
+
+        # ---- KPIs ----
+        total = int(len(cur))
+        c_counts = (cur.groupby(["country_name","alpha3"], as_index=False)
+                      .size().rename(columns={"size":"count"})
+                      .sort_values("count", ascending=False))
+        r_counts = (cur.groupby("role", as_index=False)
+                      .size().rename(columns={"size":"count"})
+                      .sort_values("count", ascending=False))
+        cont_counts = (cur[cur["continent"]!="Other/Unknown"]
+                       .groupby("continent", as_index=False).size()
+                       .rename(columns={"size":"count"})
+                       .sort_values("count", ascending=False))
+
+        unique_countries = int(c_counts["country_name"].nunique())
+        continents_covered = int(cont_counts["continent"].nunique())
+
+        # Top country KPI
+        if not c_counts.empty:
+            top_country = c_counts.iloc[0]
+            top_country_share = top_country["count"] / total if total else 0
+            lo, hi = wilson_ci(int(top_country["count"]), total)
+        else:
+            top_country = {"country_name":"—","count":0}
+            top_country_share, lo, hi = 0, 0, 0
+
+        # Top role KPI
+        if not r_counts.empty:
+            top_role = r_counts.iloc[0]
+            top_role_share = top_role["count"] / total if total else 0
+            lo_r, hi_r = wilson_ci(int(top_role["count"]), total)
+        else:
+            top_role = {"role":"—","count":0}
+            top_role_share, lo_r, hi_r = 0, 0, 0
+
+        # Regional Balance Index (inverse HHI across continents)
+        cont_total = cont_counts["count"].sum()
+        cont_shares = (cont_counts["count"] / cont_total).tolist() if cont_total else []
+        rbi = inv_hhi(cont_shares)
+
+        # Role Diversity Score (inverse HHI across roles)
+        role_total = r_counts["count"].sum()
+        role_shares = (r_counts["count"] / role_total).tolist() if role_total else []
+        role_div = inv_hhi(role_shares)
+
+        # Top-5 countries coverage
+        top5_coverage = (c_counts["count"].head(5).sum() / total) if total else 0
+
+        # KPI display
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        k1.metric("Total responses", total)
+        k2.metric("Unique countries", unique_countries)
+        k3.metric("Continents covered", continents_covered)
+        k4.metric("Top country share",
+                  f"{top_country_share:.1%}",
+                  f"[{lo:.0%}–{hi:.0%}]")
+        k5.metric("Top role share",
+                  f"{top_role_share:.1%}",
+                  f"[{lo_r:.0%}–{hi_r:.0%}]")
+        k6.metric("Top-5 countries coverage", f"{top5_coverage:.1%}")
+        st.caption(f"Regional Balance Index (continents): **{rbi:.2f}**  |  Role Diversity Score: **{role_div:.2f}**")
+
+        # ---- YoY deltas ----
+        st.subheader("Year-over-year changes")
+        if not prev.empty and len(prev) > 0:
+            # Continent shares YoY
+            cur_cont = cont_counts.copy()
+            cur_cont["share"] = cur_cont["count"] / cont_total if cont_total else 0
+
+            prev_cont = (prev[prev["continent"]!="Other/Unknown"].groupby("continent", as_index=False)
+                         .size().rename(columns={"size":"count"}))
+            prev_total = prev_cont["count"].sum()
+            prev_cont["share"] = prev_cont["count"] / prev_total if prev_total else 0
+
+            yoy_cont = pd.merge(cur_cont[["continent","share"]],
+                                prev_cont[["continent","share"]],
+                                on="continent", how="outer", suffixes=("_cur","_prev")).fillna(0)
+            yoy_cont["Δpp"] = (yoy_cont["share_cur"] - yoy_cont["share_prev"]) * 100
+
+            cont_bar = px.bar(yoy_cont.sort_values("Δpp", ascending=False),
+                              x="continent", y="Δpp",
+                              title=None, labels={"Δpp":"Δ (pp)", "continent":"Continent"})
+            cont_bar.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=350)
+            st.plotly_chart(cont_bar, use_container_width=True)
+
+            # Top roles YoY (only roles appearing this year)
+            cur_roles = r_counts.copy()
+            cur_roles["share"] = cur_roles["count"] / role_total if role_total else 0
+            prev_roles = (prev.groupby("role", as_index=False).size()
+                          .rename(columns={"size":"count"}))
+            prev_roles_total = prev_roles["count"].sum()
+            prev_roles["share"] = prev_roles["count"] / prev_roles_total if prev_roles_total else 0
+
+            yoy_roles = pd.merge(cur_roles[["role","share"]],
+                                 prev_roles[["role","share"]],
+                                 on="role", how="left", suffixes=("_cur","_prev")).fillna(0)
+            yoy_roles["Δpp"] = (yoy_roles["share_cur"] - yoy_roles["share_prev"]) * 100
+            yoy_roles = yoy_roles.sort_values("Δpp", ascending=False).head(12)
+
+            role_bar = px.bar(yoy_roles, x="role", y="Δpp",
+                              labels={"role":"Role","Δpp":"Δ (pp)"})
+            role_bar.update_layout(xaxis_tickangle=-25, margin=dict(l=10,r=10,t=10,b=10), height=350)
+            st.plotly_chart(role_bar, use_container_width=True)
+        else:
+            st.info("No previous year to compare.")
+
+        st.markdown("---")
+
+        # ---- Cross-tabs ----
+        st.subheader("Continent × Role (heatmap)")
+        cross_cr = (cur[cur["continent"]!="Other/Unknown"].groupby(["continent","role"])
+                    .size().reset_index(name="count"))
+        if not cross_cr.empty:
+            # pivot for heatmap
+            pivot_cr = cross_cr.pivot(index="continent", columns="role", values="count").fillna(0)
+            hm1 = px.imshow(pivot_cr.values,
+                            x=pivot_cr.columns, y=pivot_cr.index,
+                            color_continuous_scale="Viridis",
+                            labels=dict(x="Role", y="Continent", color="Count"))
+            hm1.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=520)
+            st.plotly_chart(hm1, use_container_width=True)
+        else:
+            st.info("Not enough data for continent × role.")
+
+        st.subheader("Top countries × Role (heatmap)")
+        top_c = c_counts.head(topn_countries_heatmap)["country_name"].tolist()
+        cross_cr2 = (cur[cur["country_name"].isin(top_c)]
+                     .groupby(["country_name","role"]).size().reset_index(name="count"))
+        if not cross_cr2.empty:
+            piv2 = cross_cr2.pivot(index="country_name", columns="role", values="count").fillna(0)
+            hm2 = px.imshow(piv2.values,
+                            x=piv2.columns, y=piv2.index,
+                            color_continuous_scale="Viridis",
+                            labels=dict(x="Role", y="Country", color="Count"))
+            hm2.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=520)
+            st.plotly_chart(hm2, use_container_width=True)
+        else:
+            st.info("Not enough data for country × role.")
+
+        st.markdown("---")
+
+        # ---- Trends ----
+        st.subheader("Monthly submissions")
+        by_month = (cur.groupby("month").size().reset_index(name="count")
+                    .sort_values("month"))
+        if not by_month.empty:
+            line = px.line(by_month, x="month", y="count", markers=True,
+                           labels={"month":"Month","count":"Submissions"})
+            line.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=320)
+            st.plotly_chart(line, use_container_width=True)
+
+        st.subheader("Monthly submissions by continent (stacked area)")
+        by_month_cont = (cur[cur["continent"]!="Other/Unknown"]
+                         .groupby(["month","continent"]).size()
+                         .reset_index(name="count")
+                         .sort_values("month"))
+        if not by_month_cont.empty:
+            area = px.area(by_month_cont, x="month", y="count", color="continent",
+                           groupnorm=None, labels={"count":"Submissions","month":"Month"})
+            area.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=380)
+            st.plotly_chart(area, use_container_width=True)
+
+        # Momentum: last 3 months vs previous 3 months by continent
+        st.subheader("Momentum (last 3 months vs previous 3) by continent")
+        if not by_month_cont.empty:
+            # Order months and pick windows
+            months_sorted = sorted(by_month_cont["month"].unique())
+            last3 = months_sorted[-3:] if len(months_sorted) >= 3 else months_sorted
+            prev3 = months_sorted[-6:-3] if len(months_sorted) >= 6 else []
+            m_last = by_month_cont[by_month_cont["month"].isin(last3)].groupby("continent")["count"].sum()
+            m_prev = by_month_cont[by_month_cont["month"].isin(prev3)].groupby("continent")["count"].sum()
+            momentum = pd.DataFrame({
+                "continent": sorted(set(m_last.index).union(set(m_prev.index))),
+            })
+            momentum["last_3"] = momentum["continent"].map(m_last).fillna(0).astype(int)
+            momentum["prev_3"] = momentum["continent"].map(m_prev).fillna(0).astype(int)
+            momentum["Δ"] = momentum["last_3"] - momentum["prev_3"]
+            st.dataframe(momentum.sort_values("Δ", ascending=False), use_container_width=True)
+
+        st.markdown("---")
+
+        # ---- Equity & concentration checks ----
+        st.subheader("Balance & concentration checks")
+        if not cont_counts.empty:
+            shares = (cont_counts.set_index("continent")["count"] / cont_total)
+            max_share = shares.max() if not shares.empty else 0
+            min_share = shares.min() if not shares.empty else 0
+            st.write(f"- **Max–min continent share gap:** {(max_share - min_share)*100:.1f} pp")
+        # Top-3 role concentration per continent
+        cross_roles = (cur[cur["continent"]!="Other/Unknown"]
+                       .groupby(["continent","role"]).size().reset_index(name="count"))
+        if not cross_roles.empty:
+            totals_by_cont = cross_roles.groupby("continent")["count"].sum()
+            top3_conc = (cross_roles.sort_values(["continent","count"], ascending=[True,False])
+                         .groupby("continent").head(3).groupby("continent")["count"].sum()
+                        ) / totals_by_cont
+            conc_df = top3_conc.reset_index().rename(columns={"count":"Top-3 role concentration"})
+            conc_df["Top-3 role concentration"] = (conc_df["Top-3 role concentration"] * 100).round(1)
+            st.dataframe(conc_df, use_container_width=True)
+
+        # ---- Downloads ----
+        st.subheader("Download data")
+        # Build CSVs
+        out_country = c_counts.copy()
+        out_roles = r_counts.copy()
+        out_cont = cont_counts.copy()
+        st.download_button("Download country counts (CSV)",
+                           data=out_country.to_csv(index=False).encode("utf-8"),
+                           file_name=f"country_counts_{year_sel}.csv",
+                           mime="text/csv", use_container_width=True)
+        st.download_button("Download role counts (CSV)",
+                           data=out_roles.to_csv(index=False).encode("utf-8"),
+                           file_name=f"role_counts_{year_sel}.csv",
+                           mime="text/csv", use_container_width=True)
+        st.download_button("Download continent counts (CSV)",
+                           data=out_cont.to_csv(index=False).encode("utf-8"),
+                           file_name=f"continent_counts_{year_sel}.csv",
+                           mime="text/csv", use_container_width=True)
