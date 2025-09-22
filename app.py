@@ -557,7 +557,44 @@ with tab6:
                   f"[{lo_r:.0%}–{hi_r:.0%}]")
         k6.metric("Top-5 countries coverage", f"{top5_coverage:.1%}")
         st.caption(f"Regional Balance Index (continents): **{rbi:.2f}**  |  Role Diversity Score: **{role_div:.2f}**")
+# ---- World map (selected year) ----
+st.subheader("World map (selected year)")
 
+if not c_counts.empty:
+    # Choose metric to color by
+    map_metric = st.radio(
+        "Map metric",
+        ["Responses", "Share %"],
+        index=0,
+        horizontal=True,
+        key="yr_map_metric"
+    )
+
+    c_map = c_counts.copy()
+    c_map["share"] = c_map["count"] / total if total else 0
+
+    color_col = "count" if map_metric == "Responses" else "share"
+
+    map_fig = px.choropleth(
+        c_map,
+        locations="alpha3",               # ISO-3 codes already in your data
+        color=color_col,
+        hover_name="country_name",
+        color_continuous_scale="Viridis",
+        projection="natural earth",
+        labels={"count": "Responses", "share": "Share"}
+    )
+
+    # Pretty colorbar/hover for share
+    if map_metric == "Share %":
+        map_fig.update_coloraxes(tickformat=".0%")
+
+    map_fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=520)
+    st.plotly_chart(map_fig, use_container_width=True)
+else:
+    st.info("Not enough country data to draw the map.")
+
+        
         # ---- YoY deltas ----
         st.subheader("Year-over-year changes")
         if not prev.empty and len(prev) > 0:
