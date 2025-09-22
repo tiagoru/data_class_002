@@ -596,7 +596,7 @@ else:
 
         
         # ---- YoY deltas ----
-        st.subheader("Year-over-year changes")
+    st.subheader("Year-over-year changes")
         if not prev.empty and len(prev) > 0:
             # Continent shares YoY
             cur_cont = cont_counts.copy()
