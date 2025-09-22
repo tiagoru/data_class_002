@@ -112,30 +112,30 @@ with tab1:
     st.write("Answer the two questions and submit. Results update live.")
 
     with st.form("survey_form", clear_on_submit=True):
-    # Q1: Country
-    default_idx = country_names.index("United States") if "United States" in country_names else 0
-    chosen_country = st.selectbox("1) Where are you from?", country_names, index=default_idx)
+        # Q1: Country (closed list)
+        default_idx = country_names.index("United States") if "United States" in country_names else 0
+        chosen_country = st.selectbox("1) Where are you from?", country_names, index=default_idx)
 
-    # Q2: Role (open-ended)
-    role_input = st.text_input(
-        "2) What is your role in your organization?",
-        placeholder="e.g., Product Manager / Data Scientist / VP Engineering"
-    )
-
-    submitted = st.form_submit_button("Submit response")
-
-if submitted and chosen_country:
-    role_value = normalize_role(role_input)
-    if not role_value:
-        st.error("Please enter your role.")
-    else:
-        conn.execute(
-            "INSERT INTO responses (ts, country_name, alpha3, role) VALUES (?, ?, ?, ?)",
-            (datetime.utcnow().isoformat(), chosen_country, alpha3_map[chosen_country], role_value)
+        # Q2: Role (open-ended)
+        role_input = st.text_input(
+            "2) What is your role in your organization?",
+            placeholder="e.g., Product Manager / Data Scientist / VP Engineering"
         )
-        conn.commit()
-        st.success(f"Thanks! Recorded: {chosen_country}, {role_value}")
 
+        submitted = st.form_submit_button("Submit response")
+
+    # Handle submission (keep this INSIDE tab1)
+    if submitted and chosen_country:
+        role_value = normalize_role(role_input)
+        if not role_value:
+            st.error("Please enter your role.")
+        else:
+            conn.execute(
+                "INSERT INTO responses (ts, country_name, alpha3, role) VALUES (?, ?, ?, ?)",
+                (datetime.utcnow().isoformat(), chosen_country, alpha3_map[chosen_country], role_value)
+            )
+            conn.commit()
+            st.success(f"Thanks! Recorded: {chosen_country}, {role_value}")
 
 # ---------- Data ----------
 with tab2:
