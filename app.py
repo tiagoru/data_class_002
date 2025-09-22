@@ -11,6 +11,21 @@ import plotly.express as px
 from wordcloud import WordCloud
 import pycountry
 
+import re  # add this if not already imported
+
+def normalize_role(text: str) -> str:
+    """Trim, collapse spaces, title-case while preserving common acronyms, cap length."""
+    s = (text or "").strip()
+    s = re.sub(r"\s+", " ", s)
+    if not s:
+        return ""
+    acronyms = {"CEO","CTO","CFO","CMO","COO","CIO","VP","SVP","HR","UX","UI","PM","ML","AI","R&D"}
+    tokens = []
+    for w in s.split(" "):
+        w_up = w.upper()
+        tokens.append(w_up if w_up in acronyms else w.capitalize())
+    return " ".join(tokens)[:80]  # keep it tidy
+
 # ---------- Optional country→continent mapping ----------
 try:
     import country_converter as coco
@@ -84,14 +99,7 @@ countries_df = get_countries()
 country_names = countries_df["name"].tolist()
 alpha3_map = dict(zip(countries_df["name"], countries_df["alpha_3"]))
 
-# role choices (edit as needed)
-ROLE_CHOICES = [
-    "Individual Contributor", "Manager", "Senior Manager", "Director",
-    "VP", "C-level/Executive", "Founder/Owner", "Engineer/Developer",
-    "Data/AI/ML", "Product", "Design/UX", "Sales", "Marketing",
-    "HR/People", "Operations", "Finance", "Educator/Professor",
-    "Student", "Consultant", "Researcher", "Other (type below)"
-]
+
 
 # ---------- Tabs ----------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -104,25 +112,30 @@ with tab1:
     st.write("Answer the two questions and submit. Results update live.")
 
     with st.form("survey_form", clear_on_submit=True):
-        # Q1: Country
-        default_idx = country_names.index("United States") if "United States" in country_names else 0
-        chosen_country = st.selectbox("1) Where are you from?", country_names, index=default_idx)
+    # Q1: Country
+    default_idx = country_names.index("United States") if "United States" in country_names else 0
+    chosen_country = st.selectbox("1) Where are you from?", country_names, index=default_idx)
 
-        # Q2: Role
-        role_choice = st.selectbox("2) What is your role in your organization?", ROLE_CHOICES, index=0)
-        role_other = ""
-        if role_choice == "Other (type below)":
-            role_other = st.text_input("Type your role")
-        submitted = st.form_submit_button("Submit response")
+    # Q2: Role (open-ended)
+    role_input = st.text_input(
+        "2) What is your role in your organization?",
+        placeholder="e.g., Product Manager / Data Scientist / VP Engineering"
+    )
 
-    if submitted and chosen_country:
-        role_value = role_other.strip() if role_choice == "Other (type below)" and role_other.strip() else role_choice
+    submitted = st.form_submit_button("Submit response")
+
+if submitted and chosen_country:
+    role_value = normalize_role(role_input)
+    if not role_value:
+        st.error("Please enter your role.")
+    else:
         conn.execute(
             "INSERT INTO responses (ts, country_name, alpha3, role) VALUES (?, ?, ?, ?)",
             (datetime.utcnow().isoformat(), chosen_country, alpha3_map[chosen_country], role_value)
         )
         conn.commit()
         st.success(f"Thanks! Recorded: {chosen_country}, {role_value}")
+
 
 # ---------- Data ----------
 with tab2:
